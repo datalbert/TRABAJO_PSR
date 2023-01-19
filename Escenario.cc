@@ -14,8 +14,9 @@
 #include "ns3/point-to-point-net-device.h"
 #include "ns3/point-to-point-channel.h"
 #include "ns3/csma-helper.h"
+#include "ns3/csma-net-device.h"
 #include "ns3/bridge-helper.h"
-
+#include "ns3/queue.h"
 #include "ns3/udp-client-server-helper.h"
 #include "ns3/traffic-control-helper.h"
 #include "ns3/queue-disc-container.h"
@@ -23,6 +24,13 @@
 #include "ns3/packet-sink-helper.h"
 #include "ns3/on-off-helper.h"
 #include "observador.h"
+#include "ns3/socket.h"
+#include "ns3/ipv4-global-routing-helper.h"
+#include "ns3/ipv4-interface-container.h"
+#include "ns3/gnuplot.h"
+#include "ns3/csma-net-device.h"
+
+
 
 using namespace ns3;
 
@@ -30,21 +38,26 @@ using namespace ns3;
 NS_LOG_COMPONENT_DEFINE("Proyecto");
 
 Ptr<Node> PuenteHelper (NodeContainer nodosLan, NetDeviceContainer & d_nodosLan,DataRateValue c_transmision);
-void escenario(Time duracion_simulacion,Time intervalo_video,Time intervalo_texto,DataRateValue c_transmision,uint16_t port_servidor);
+double escenario(int decision,int num_clientes_viapol,int num_clientes_cartuja,int num_clientes_reina_mercedes,int num_clientes_rectorado,Time duracion_simulacion,Time intervalo_video,Time intervalo_texto,DataRateValue c_transmision,uint16_t port_servidor);
 
 int main (int arcg, char *argv[])
 {
 
   Time::SetResolution(Time::NS);
 
-  Time duracion = Time("60s");
+  Time duracion = Time("20s");
   Time intervalo = Time("1s");	
   std::string intervalo_video_value="100us";
   std::string intervalo_texto_value="50us";
-  std::string regBin="100kbps";
+  std::string regBin="300kbps";
+  int num_clientes_viapol=10;
+  int num_clientes_cartuja=20;
+  int num_clientes_reina_mercedes=30;
+  int num_clientes_rectorado=50;
   int tamPaq_video = 1024;
   int tamPaq_texto = 820;
   int tam_cola=10000;
+  int num_puntos=7;
   uint16_t port_servidor=20;
 
   //Línea de comandos
@@ -56,6 +69,10 @@ int main (int arcg, char *argv[])
   cmd.AddValue("tamPaq_video","tamaño medio de los paquetes de videos en octetos ",tamPaq_video);
   cmd.AddValue("tamPaq_texto","tamaño medio de los paquetes de texto en octetos ",tamPaq_texto);
   cmd.AddValue("tam_cola","tamaños de la cola del servidor en octetos",tam_cola);
+  cmd.AddValue("clientes_rectorado","numero de clientes a conectados en la red del rectorado",num_clientes_rectorado);
+  cmd.AddValue("clientes_viapol","numero de clientes a conectados en la red del rectorado",num_clientes_viapol);
+  cmd.AddValue("clientes_cartuja","numero de clientes a conectados en la red del rectorado",num_clientes_cartuja);
+  cmd.AddValue("clientes_reina_mercedes","numero de clientes a conectados en la red del rectorado",num_clientes_reina_mercedes);
   cmd.Parse (arcg,argv);
 
 
@@ -63,113 +80,287 @@ int main (int arcg, char *argv[])
   Time intervalo_texto =Time(intervalo_texto_value);
 
   DataRateValue RegBin = DataRateValue(regBin);
+  int i=0;
+  double retardo=escenario(i,num_clientes_viapol,num_clientes_cartuja,num_clientes_reina_mercedes,num_clientes_rectorado,duracion,intervalo_video,intervalo_texto,RegBin,port_servidor);
+
   
-  escenario(duracion,intervalo_video,intervalo_texto,RegBin,port_servidor);
+  //creacion de la gráfica
+  std::string fileNameWithNoExtension = "grafica_trabajo";
+  std::string graphicsFileName        = fileNameWithNoExtension + ".png";
+  std::string plotFileName            = fileNameWithNoExtension + ".plt";
+  std::string plotTitle               = "% paq perdidos por ancho de banda en kb/s";
+  std::string dataTitle               = "Campus";
+
+  // Instantiate the plot and set its title.
+  Gnuplot plot(graphicsFileName);
+  plot.SetTitle(plotTitle);
+
+  // Make the graphics file, which the plot file will create when it
+  // is used with Gnuplot, be a PNG file.
+  plot.SetTerminal("png");
+
+  // Set the labels for each axis.
+  plot.SetLegend("Reg bin", "% Dropped Packets");
+
+
+  // Instantiate the dataset, set its title, and make the points be
+  // plotted along with connecting lines.
+  for (int i=0;i<=3;i++){
+    Gnuplot2dDataset dataset;
+    
+    if (i==0)
+      {
+       dataTitle="Campus rectorado";
+      }
+    else if(i==1)
+      {
+        dataTitle="Campus reina mercedes";
+      }
+    else if(i==2)
+      {
+        dataTitle="Campus viapol";
+      }
+    else
+      {
+        dataTitle="Campus cartuja";
+      }
+    
+    dataset.SetTitle(dataTitle);
+    dataset.SetStyle(Gnuplot2dDataset::LINES_POINTS);
+    uint64_t regbin_inicial=1000000;
+
+    for (int j=1;j<=num_puntos;j++){
+      regbin_inicial=regbin_inicial-100000;
+      DataRateValue regbin_simu=DataRateValue(regbin_inicial);
+      NS_LOG_DEBUG("reg_bin" << regbin_inicial);
+      double retardo=escenario(i,num_clientes_viapol,num_clientes_cartuja,num_clientes_reina_mercedes,num_clientes_rectorado,duracion,intervalo_video,intervalo_texto,regbin_simu,port_servidor);
+      dataset.Add(regbin_inicial,retardo);
+    }
+    plot.AddDataset(dataset);
+
+  }
+  std::ofstream plotFile(plotFileName.c_str());
+
+  // Write the plot file.
+  plot.GenerateOutput(plotFile);
+
+  // Close the plot file.
+  plotFile.close();
   
 
 
 }
 
-void escenario(Time duracion_simulacion,Time intervalo_video, Time intervalo_texto,DataRateValue c_transmision,uint16_t port_servidor){
+double escenario(int decision,int num_clientes_viapol,int num_clientes_cartuja,int num_clientes_reina_mercedes,int num_clientes_rectorado,Time duracion_simulacion,Time intervalo_video, Time intervalo_texto,DataRateValue c_transmision,uint16_t port_servidor){
+  
   //Definimos el contenedor de nodos de universidades
-  NodeContainer c_univ;
-  //Creamos tantos nodos como facultades
-  c_univ.Create(4);
+  Simulator::Destroy();
+  NS_LOG_DEBUG("Creating nodecontainers for university");
+  NodeContainer c_rectorado;
+  NodeContainer c_viapol;
+  NodeContainer c_reina_mercedes;
+  NodeContainer c_cartuja;
   
-  Names::Add ("rectorado",c_univ.Get(0));
-  Names::Add ("viapol",c_univ.Get(1));
-  Names::Add ("reina_mercedes",c_univ.Get(2));
-  Names::Add ("cartuja",c_univ.Get(3));
-  
+  //Creamos tantos los clientes en cada campus y le sumamos 1 porque va a ser el nodo como de router 
+  NS_LOG_DEBUG("Creating the clients in nodecontainer of universitys");
+  c_rectorado.Create(num_clientes_rectorado+1);
+  c_viapol.Create(num_clientes_viapol+1);
+  c_cartuja.Create(num_clientes_cartuja+1);
+  c_reina_mercedes.Create(num_clientes_reina_mercedes+1);
+
+ 
+
   //Creamos nodos de servidores
+  NS_LOG_DEBUG("Creating the serv container");
   NodeContainer c_serv;
   c_serv.Create(1);
-  
-  Names::Add ("servidor",c_serv.Get(0));//hacemos un nombrado a los nodos para posteriormente poder buscarlo mas sencillo
-  
-  //Ptr<CsmaNetDevice> servidor_device=Names::Find<CsmaNetDevice> ("servidor");
 
-  //Creamos un contenedor donde meter todos los nodos
+  NS_LOG_DEBUG("Creating a nodecontainer how englove all nodos in the network");
   NodeContainer c_todos;
-  c_todos.Add (c_serv);
-  c_todos.Add(c_univ);
+  c_todos.Add(c_serv);
+  c_todos.Add(c_viapol);
+  c_todos.Add(c_reina_mercedes);
+  c_todos.Add(c_rectorado);
+  c_todos.Add(c_cartuja);
   
   NetDeviceContainer c_dispositivos;
 
-  
   //Añadimos la pila
+
   InternetStackHelper h_pila; 
   h_pila.SetIpv6StackInstall (false); 
-  h_pila.SetIpv4ArpJitter (true);
-  h_pila.Install (c_todos);
+  h_pila.Install(c_todos);
+
+  //Creamos un contenedor donde meter todos los nodos que se van a conectar al conmutador
+  NodeContainer c_nucleo;
+  c_nucleo.Add (c_serv.Get(0));
+  c_nucleo.Add(c_rectorado.Get(0));
+  c_nucleo.Add(c_reina_mercedes.Get(0));
+  c_nucleo.Add(c_viapol.Get(0));
+  c_nucleo.Add(c_cartuja.Get(0));
+  //instalamos un canal csma en cada campus
+  
+  NS_LOG_DEBUG("Instaling a csma channel for each campus");
+  CsmaHelper csma;
+  csma.SetChannelAttribute ("DataRate", DataRateValue (DataRate ("500kb/s")));
+  csma.SetChannelAttribute ("Delay", TimeValue (MilliSeconds (1)));
+
+  NetDeviceContainer nd_viapol = csma.Install (c_viapol);  
+  NetDeviceContainer nd_cartuja = csma.Install (c_cartuja);  
+  NetDeviceContainer nd_reina_mercedes = csma.Install (c_reina_mercedes);  
+  NetDeviceContainer nd_rectorado = csma.Install (c_rectorado);
+
 
   //Utilizamos PuenteHelper para conectar los servidores y los clientes.
-  Ptr<Node> puente = PuenteHelper(c_todos, c_dispositivos,c_transmision);
-
-  //Añadimos la cola al servidor vamos a tener dos cola 
-
-  TrafficControlHelper tch;
-  uint16_t handle = tch.SetRootQueueDisc ("ns3::PrioQueueDisc", "Priomap", StringValue ("0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1"));
-  TrafficControlHelper::ClassIdList cid = tch.AddQueueDiscClasses (handle, 2, "ns3::QueueDiscClass");
-  tch.AddChildQueueDisc (handle, cid[0], "ns3::FifoQueueDisc");
-  tch.AddChildQueueDisc (handle, cid[1], "ns3::FifoQueueDisc");
-  
-  QueueDiscContainer queue_container = tch.Install(c_dispositivos.Get(0));
-  
+  Ptr<Node> puente = PuenteHelper(c_nucleo, c_dispositivos,c_transmision);
 
   //Asignamos direcciones IPv4
 
-  Ipv4AddressHelper h_direcciones ("10.1.1.0", "255.255.255.0");
-  Ipv4InterfaceContainer c_interfaces =h_direcciones.Assign (c_dispositivos);
-  //Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
-  NS_LOG_DEBUG("dir ip del servidor es "<< c_interfaces.GetAddress(0,0));
-  NS_LOG_DEBUG("dir ip del nodos 1 es "<< c_interfaces.GetAddress(1,0));
-  NS_LOG_DEBUG("dir ip del nodo 2 es "<< c_interfaces.GetAddress(2,0));
-  NS_LOG_DEBUG("dir ip del nodo 3 es "<< c_interfaces.GetAddress(3,0));
-  
-  //Configuramos multicasting
-
-  Ipv4Address multicastSource("10.1.1.1");
-  Ipv4Address multicastGroup("225.1.2.4");
-
-  Ipv4StaticRoutingHelper multicast;
-
-  //establecemos una ruta estatica en el emisor el servidor
-  Ptr<Node> sender=c_todos.Get(0);
-  Ptr<NetDevice> senderif=c_dispositivos.Get(0);
-  multicast.SetDefaultMulticastRoute(sender,senderif);
+  NS_LOG_DEBUG("Assing ip addresse to each LAN");
+  Ipv4AddressHelper ipv4Addr;
+  ipv4Addr.SetBase ("10.1.1.0", "255.255.255.0");
+  Ipv4InterfaceContainer  ip_nucleo =  ipv4Addr.Assign (c_dispositivos);
+  ipv4Addr.SetBase ("10.1.2.0", "255.255.255.0");
+  Ipv4InterfaceContainer  ip_viapol =  ipv4Addr.Assign (nd_viapol);
+  ipv4Addr.SetBase ("10.1.3.0", "255.255.255.0");
+  Ipv4InterfaceContainer  ip_cartuja =  ipv4Addr.Assign (nd_cartuja);
+  ipv4Addr.SetBase ("10.1.4.0", "255.255.255.0");
+  Ipv4InterfaceContainer  ip_reina_mercedes =  ipv4Addr.Assign (nd_reina_mercedes);
+  ipv4Addr.SetBase ("10.1.5.0", "255.255.255.0");
+  Ipv4InterfaceContainer  ip_rectorado =  ipv4Addr.Assign (nd_rectorado);
+ 
+  Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
 
   //creamos dos aplicaciones de OnOff en el servidor una para trafico de video y otra para texto
+  NS_LOG_DEBUG("Creating the OnOffApplication in the differents sources");
+
+  uint16_t port=22;
+
   
-  uint16_t multicastPort=22;
-
-  OnOffHelper onoff ("ns3::UdpSocketFactory", 
-                      Address (InetSocketAddress (multicastGroup, multicastPort)));
-  onoff.SetConstantRate (DataRate ("300b/s"));
-  onoff.SetAttribute ("PacketSize", UintegerValue (128));
-  //establecer una que utilice udp para video
-  ApplicationContainer app_s=onoff.Install(c_serv.Get(0));
-  app_s.Start (Seconds (1.));
-  app_s.Stop (Seconds (10.));
+  OnOffHelper onoff_udp ("ns3::UdpSocketFactory", 
+                      Address (InetSocketAddress (ip_nucleo.GetAddress(0), port)));
+  onoff_udp.SetConstantRate (DataRate ("300kb/s"));
+  onoff_udp.SetAttribute ("PacketSize", UintegerValue (300));
+  NS_LOG_DEBUG("Instalacion de las fuentes en los equipos de los campus");
+  //installar aplicaciones en cad uno de los campus
+  ApplicationContainer app_sources_viapol;
+  NS_LOG_DEBUG(c_viapol.GetN());
+  for (int i=1;i<c_viapol.GetN();i++){
+    app_sources_viapol.Add(onoff_udp.Install(c_viapol.Get(i)));
+  }
+  ApplicationContainer app_sources_rectorado;
+  for (int i=1;i<c_rectorado.GetN();i++){
+    app_sources_rectorado.Add(onoff_udp.Install(c_rectorado.Get(i)));
+  }
+  ApplicationContainer app_sources_cartuja;
+  for (int i=1;i<c_cartuja.GetN();i++){
+    app_sources_cartuja.Add(onoff_udp.Install(c_cartuja.Get(i)));
+  }
+  NS_LOG_DEBUG("aqui");
+  ApplicationContainer app_sources_reina_mercedes;
+  for (int i=1;i<c_reina_mercedes.GetN();i++){
+    app_sources_reina_mercedes.Add(onoff_udp.Install(c_reina_mercedes.Get(i)));
+  }
   
-  //establecer que utilice por ejemplo tcp para texto
+  
+ //instalamos en los receptores aplicaciones para recibir los paquetes
+  PacketSinkHelper sink_udp ("ns3::UdpSocketFactory",
+                            InetSocketAddress (Ipv4Address::GetAny (), port));
+  ApplicationContainer app_l = sink_udp.Install (c_nucleo.Get(0));
+  app_l.Add(sink_udp.Install (c_rectorado.Get(0)));
+  app_l.Start (Seconds (0.1));
+  app_l.Stop (duracion_simulacion);
+  NS_LOG_DEBUG("SE HA CREADO EL ESCENARIO");//Ptr<Queue<Packet>> cola_puente_rectorado = c_dispositivos.Get(3)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_puente_rectorado = puente->GetDevice(3)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_puente_cartuja = c_dispositivos.Get(4)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_puente_viapol = c_dispositivos.Get(1)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_puente_reina_mercedes = c_dispositivos.Get(2)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_puente_serv = c_dispositivos.Get(0)->GetObject<CsmaNetDevice>()->GetQueue();
+  
+  //puntero para obtener los paquetes recibidos== tx en el 
+  
+  Ptr<Queue<Packet>> cola_router_rectorado = nd_rectorado.Get(0)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_router_cartuja = nd_cartuja.Get(0)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_router_viapol = nd_viapol.Get(0)->GetObject<CsmaNetDevice>()->GetQueue();
+  Ptr<Queue<Packet>> cola_router_reina_mercedes = nd_reina_mercedes.Get(0)->GetObject<CsmaNetDevice>()->GetQueue();
 
-  //instalamos en los receptores aplicaciones para recibir los paquetes
-  PacketSinkHelper sink ("ns3::UdpSocketFactory",
-                            InetSocketAddress (Ipv4Address::GetAny (), multicastPort));
-  ApplicationContainer app_c = sink.Install (c_univ);
+  Ptr<CsmaNetDevice> router_rectorado=nd_rectorado.Get(0)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> router_cartuja=nd_cartuja.Get(0)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> router_viapol=nd_viapol.Get(0)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> router_reina_mercedes=nd_reina_mercedes.Get(0)->GetObject<CsmaNetDevice>();
 
-  app_c.Start (Seconds (1.));
-  app_c.Stop (Seconds (10.));
+  Ptr<CsmaNetDevice> puente_rectorado=c_dispositivos.Get(3)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> puente_cartuja=c_dispositivos.Get(4)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> puente_viapol=c_dispositivos.Get(1)->GetObject<CsmaNetDevice>();
+  Ptr<CsmaNetDevice> puente_reina_mercedes=c_dispositivos.Get(2)->GetObject<CsmaNetDevice>();
 
-  Observador* cliente_observador=new Observador(app_c.Get(1)->GetObject<PacketSink>());
+
+  Observador* observador_rectorado=new Observador(app_l.Get(0)->GetObject<PacketSink>(),router_rectorado,puente_rectorado);
+  Observador* observador_cartuja=new Observador(app_l.Get(0)->GetObject<PacketSink>(),router_cartuja,puente_cartuja);
+  Observador* observador_reina_mercedes=new Observador(app_l.Get(0)->GetObject<PacketSink>(),router_reina_mercedes,puente_reina_mercedes);
+  Observador* observador_viapol=new Observador(app_l.Get(0)->GetObject<PacketSink>(),router_viapol,puente_viapol);
+  Observador* cliente_observador_router_rectorado=new Observador(app_sources_viapol.Get(0)->GetObject<OnOffApplication>());
+ 
+  csma.EnablePcap("proyecto",c_dispositivos.Get(0));
+
+  //vemos el tamaño de cola del dispositivo para los 4 equipos
+
+  
+
   
   NS_LOG_INFO("Arranca simulación");
-    
+  
     Simulator::Stop(duracion_simulacion);
     Simulator::Run();
-  NS_LOG_INFO("Numero total de paquetes " << cliente_observador->TotalPaquetes());
+  
+  NS_LOG_INFO("Numero total de paquetes " << observador_rectorado->TotalPaquetes() << " recibidos en el  servidor");
+  //NS_LOG_INFO("Numero total de paquetes " << cliente_observador_router_rectorado->TotalPaquetes_enviado() << " enviados por una fuente de viapol");
+  /*
+  NS_LOG_DEBUG("TOTAL DE PAQUETES RECIBIDOR POR EL ROUTER DE VIAPOL " << cola_router_viapol->GetTotalReceivedPackets());
+  NS_LOG_DEBUG("TOTAL DE PAQUETES RECIBIDOR POR EL ROUTER DE RECTORADO " << cola_router_rectorado->GetTotalReceivedPackets());
+  NS_LOG_DEBUG("TOTAL DE PAQUETES PERDIDOS POR EL ROUTER DE RECTORADO " << cola_router_rectorado->GetTotalDroppedPackets());
+  */
+  double paq_perdidos_rectorado=100*((double)observador_rectorado->TotalPaquetes_perdidos()/(double)observador_rectorado->TotalPaquetes_recibidos());
+  double paq_perdidos_reina_mercedes=100*((double)observador_reina_mercedes->TotalPaquetes_perdidos()/(double)observador_reina_mercedes->TotalPaquetes_recibidos());
+  double paq_perdidos_viapol=100*((double)observador_viapol->TotalPaquetes_perdidos()/(double)observador_viapol->TotalPaquetes_recibidos());
+  double paq_perdidos_cartuja=100*((double)observador_cartuja->TotalPaquetes_perdidos()/(double)observador_cartuja->TotalPaquetes_recibidos());
+  
+  
+
+  //usar este
+  //double porcentaje_paquetes_perdidos = 100*(double)cola_servidor->GetTotalDroppedPackets() / (double)(retardo.TotalPaquetesTx());
+
+  double valor_devuelto;
+  
+  NS_LOG_INFO("paquetes perdidos por el rectorado " << cola_puente_rectorado->GetTotalDroppedPackets());
+  NS_LOG_INFO("paquetes perdidos por el rectorado " << cola_router_rectorado->GetTotalDroppedPackets());
+
+  NS_LOG_INFO("PAQUETES RECIBIDOS POR EL RECTORADO "<<cola_router_rectorado->GetTotalReceivedPackets());
+  NS_LOG_INFO("PAQUETES RECIBIDOS POR EL RECTORADO "<<cola_puente_rectorado->GetTotalReceivedPackets());
+  //NS_LOG_INFO("PAQ PERDIDOS RETORADO " << cliente_observador_servidor->TotalPaquetes_perdidos());
+
+  if(decision==0)
+    {
+      valor_devuelto=paq_perdidos_rectorado;
+      NS_LOG_INFO("PORCENTAJE PAQUETES PERDIDOS " << valor_devuelto);
+    }
+  else if(decision==1)
+    {
+      valor_devuelto=paq_perdidos_reina_mercedes;
+    }
+      
+  else if(decision==2)
+    {
+      valor_devuelto=paq_perdidos_viapol;
+    }
+  else
+    {
+      valor_devuelto=paq_perdidos_cartuja;
+    }
+ 
   NS_LOG_INFO("Fin simulación");
+
+  return valor_devuelto;
 
 }
 
